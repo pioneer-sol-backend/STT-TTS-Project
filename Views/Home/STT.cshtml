@@ -1,0 +1,157 @@
+﻿@{
+    ViewData["Title"] = "Speech to Text";
+}
+
+<h2>Live Speech to Text</h2>
+
+<button id="startBtn">Start</button>
+<button id="stopBtn" disabled>Stop</button>
+
+<br />
+<br />
+
+<h3>Transcribed Speech</h3>
+<textarea id="result" rows="4" cols="70" placeholder="Your speech will appear here..."></textarea>
+
+<h3>Generated SQL Query</h3>
+<textarea id="sqlResult" rows="4" cols="70" readonly></textarea>
+
+<h3>Data from Database</h3>
+<textarea id="data" rows="10" cols="70" readonly></textarea>
+<script>
+    let socket;
+    let audioContext;
+    let microphone;
+    let processor;
+    let stream;
+
+    // DOM Element References
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const resultInput = document.getElementById("result");
+    const sqlResultInput = document.getElementById("sqlResult");
+    const dataInput = document.getElementById("data");
+
+    startBtn.onclick = async function () {
+        resultInput.value = "";
+        sqlResultInput.value = "Listening...";
+        dataInput.value = "";
+
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        socket = new WebSocket(protocol + "//" + window.location.host + "/Home/Stream");
+        socket.binaryType = "arraybuffer";
+
+        socket.onopen = async function () {
+            console.log("WebSocket connected");
+
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioContext = new AudioContext();
+            microphone = audioContext.createMediaStreamSource(stream);
+            processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+            processor.onaudioprocess = function (event) {
+                if (socket.readyState !== WebSocket.OPEN) return;
+                const input = event.inputBuffer.getChannelData(0);
+                const pcmData = downsampleAndConvert(input, audioContext.sampleRate, 16000);
+                socket.send(pcmData);
+            };
+
+            microphone.connect(processor);
+            processor.connect(audioContext.destination);
+
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        };
+
+        socket.onmessage = async function (event) {
+            console.log("Vosk Raw Message:", event.data);
+            const dataObj = JSON.parse(event.data);
+
+            // Display partial live transcriptions
+            if (dataObj.partial !== undefined) {
+                resultInput.value = dataObj.partial;
+            }
+
+            // Display final transcription frame and call backend API
+            if (dataObj.text !== undefined && dataObj.text.trim() !== "") {
+                resultInput.value = dataObj.text;
+                sqlResultInput.value = "Generating SQL query...";
+
+                try {
+                    const response = await fetch('/Home/ProcessQuery', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ question: dataObj.text })
+                    });
+
+                    const resData = await response.json();
+                    console.log("ProcessQuery Response:", resData);
+
+                    if (resData.success) {
+                        sqlResultInput.value = resData.generatedSql || "No SQL generated.";
+                        dataInput.value = resData.resultData || "No records returned.";
+                    } else {
+                        sqlResultInput.value = "Error generating SQL.";
+                        dataInput.value = "Database Error: " + resData.error;
+                    }
+                } catch (err) {
+                    console.error("Error calling /Home/ProcessQuery:", err);
+                    sqlResultInput.value = "Fetch failed. Check browser console.";
+                }
+            }
+        };
+
+        socket.onerror = function (error) {
+            console.error("WebSocket error:", error);
+        };
+
+        socket.onclose = function () {
+            console.log("WebSocket closed");
+        };
+    };
+
+    stopBtn.onclick = function () {
+        if (processor) { processor.disconnect(); processor = null; }
+        if (microphone) { microphone.disconnect(); microphone = null; }
+        if (stream) { stream.getTracks().forEach(track => track.stop()); stream = null; }
+        if (audioContext) { audioContext.close(); audioContext = null; }
+        if (socket) { socket.close(); socket = null; }
+
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+    };
+
+    function downsampleAndConvert(buffer, inputSampleRate, outputSampleRate) {
+        if (outputSampleRate === inputSampleRate) {
+            return convertFloat32ToInt16(buffer);
+        }
+        const sampleRateRatio = inputSampleRate / outputSampleRate;
+        const newLength = Math.round(buffer.length / sampleRateRatio);
+        const result = new Int16Array(newLength);
+        let offsetResult = 0;
+        let offsetBuffer = 0;
+
+        while (offsetResult < result.length) {
+            const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+            let accum = 0;
+            let count = 0;
+            for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+                accum += buffer[i];
+                count++;
+            }
+            result[offsetResult] = Math.max(-1, Math.min(1, accum / count)) * 32767;
+            offsetResult++;
+            offsetBuffer = nextOffsetBuffer;
+        }
+        return result.buffer;
+    }
+
+    function convertFloat32ToInt16(buffer) {
+        const result = new Int16Array(buffer.length);
+        for (let i = 0; i < buffer.length; i++) {
+            let sample = Math.max(-1, Math.min(1, buffer[i]));
+            result[i] = sample < 0 ? sample * 32768 : sample * 32767;
+        }
+        return result.buffer;
+    }
+</script>
