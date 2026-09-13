@@ -1,5 +1,4 @@
 ﻿using MySql.Data.MySqlClient;
-using NaturalQuery;
 using NaturalQuery.Models;
 
 namespace ST_TTS_Project.Helpers

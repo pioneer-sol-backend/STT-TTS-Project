@@ -59,7 +59,6 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 
-// Map Routes
 app.MapControllerRoute(
     name: "default",
     pattern: "{controller=Home}/{action=STT}/{id?}");
