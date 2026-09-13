@@ -106,17 +106,14 @@
     const sendBtn = document.getElementById("sendBtn");
     const micBtn = document.getElementById("micBtn");
 
-    function appendMessage(sender, text, sql, data) {
+    function appendMessage(sender, text, data) {
         const msgDiv = document.createElement("div");
         msgDiv.className = `message ${sender}-message`;
 
         let content = `<div>${text}</div>`;
-        if (sql) {
-            content += `<div class="sql-block"><strong>SQL Query:</strong><br>${sql}</div>`;
-        }
         if (data) {
             const dataStr = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
-            content += `<div style="margin-top:5px;"><strong>Results:</strong><pre style="margin:0; max-height: 150px; overflow-y: auto;">${dataStr}</pre></div>`;
+            content += `<pre style="margin-top: 8px; background: #fff; padding: 8px; border-radius: 4px; border: 1px solid #ccc; max-height: 200px; overflow-y: auto;">${dataStr}</pre>`;
         }
 
         msgDiv.innerHTML = content;
@@ -130,11 +127,10 @@
         appendMessage("user", queryText);
         userInput.value = "";
 
-        // Show temporary thinking placeholder
         const loadingDiv = document.createElement("div");
         loadingDiv.className = "message bot-message";
         loadingDiv.id = "loadingMsg";
-        loadingDiv.innerText = "Processing query...";
+        loadingDiv.innerText = "Fetching results...";
         chatBox.appendChild(loadingDiv);
         chatBox.scrollTop = chatBox.scrollHeight;
 
@@ -156,14 +152,14 @@
             const resData = await response.json();
 
             if (resData.success) {
-                appendMessage("bot", "Query execution completed:", resData.generatedSql, resData.resultData);
+                appendMessage("bot", "Database Results:", resData.resultData);
             } else {
-                appendMessage("bot", "Error executing query: " + (resData.error || "Unknown error"));
+                appendMessage("bot", "Database Error: " + (resData.error || "Execution failed."));
             }
         } catch (err) {
             const loadingEl = document.getElementById("loadingMsg");
             if (loadingEl) loadingEl.remove();
-            appendMessage("bot", "Network Failure: Unable to communicate with server.");
+            appendMessage("bot", "Network Error: Could not reach the server.");
         }
     }
 
