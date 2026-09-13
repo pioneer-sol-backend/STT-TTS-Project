@@ -197,18 +197,26 @@
                 isRecording = true;
                 micBtn.innerText = "Stop Speech";
                 micBtn.classList.add("recording");
+                userInput.value = "";
+                userInput.placeholder = "Listening...";
             };
 
             socket.onmessage = function (event) {
                 if (!event.data) return;
                 try {
                     const dataObj = JSON.parse(event.data);
-                    const text = dataObj.text || dataObj.partial || "";
-                    if (text.trim() !== "") userInput.value = text;
 
+                    // Live update the text input while speaking (handles Vosk partials or complete text)
+                    const liveText = dataObj.text || dataObj.partial || "";
+                    if (liveText.trim() !== "") {
+                        userInput.value = liveText;
+                    }
+
+                    // Once Vosk detects a completed phrase
                     if (dataObj.text && dataObj.text.trim() !== "") {
+                        const finalQuery = dataObj.text;
                         stopMic();
-                        sendQuery(dataObj.text);
+                        sendQuery(finalQuery);
                     }
                 } catch (e) {}
             };
@@ -229,6 +237,7 @@
         isRecording = false;
         micBtn.innerText = "Start Speech";
         micBtn.classList.remove("recording");
+        userInput.placeholder = "Type your query or click Start Speech...";
     }
 
     function downsampleAndConvert(buffer, inputSampleRate, outputSampleRate) {
