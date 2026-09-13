@@ -1,130 +1,242 @@
 ﻿@{
-    ViewData["Title"] = "Speech to Text";
+    ViewData["Title"] = "Dental AI Query Assistant";
 }
 
-<h2>Live Speech to Text</h2>
+<style>
+    .chat-container {
+        max-width: 750px;
+        margin: 20px auto;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        height: 600px;
+        background-color: #f9f9f9;
+        font-family: Arial, sans-serif;
+    }
+    .chat-messages {
+        flex: 1;
+        padding: 15px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .message {
+        max-width: 80%;
+        padding: 10px 14px;
+        border-radius: 12px;
+        word-wrap: break-word;
+        white-space: pre-wrap;
+    }
+    .user-message {
+        align-self: flex-end;
+        background-color: #007bff;
+        color: white;
+    }
+    .bot-message {
+        align-self: flex-start;
+        background-color: #e9ecef;
+        color: #333;
+        border: 1px solid #ddd;
+    }
+    .sql-block {
+        background-color: #272822;
+        color: #f8f8f2;
+        font-family: monospace;
+        padding: 8px;
+        border-radius: 4px;
+        margin-top: 5px;
+        overflow-x: auto;
+    }
+    .chat-input-area {
+        display: flex;
+        padding: 10px;
+        background: #fff;
+        border-top: 1px solid #ccc;
+        gap: 8px;
+    }
+    .chat-input-area input {
+        flex: 1;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+    }
+    .chat-input-area button {
+        padding: 10px 16px;
+        border: none;
+        background-color: #007bff;
+        color: white;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+    }
+    .chat-input-area button:disabled {
+        background-color: #aaa;
+    }
+    .mic-btn.recording {
+        background-color: #dc3545 !important;
+    }
+</style>
 
-<button id="startBtn">Start</button>
-<button id="stopBtn" disabled>Stop</button>
+<h2>Dental Clinic AI Assistant</h2>
 
-<br />
-<br />
+<div class="chat-container">
+    <div class="chat-messages" id="chatBox">
+        <div class="message bot-message">Hello! Ask me any question regarding services, pricing, or patient details.</div>
+    </div>
+    <div class="chat-input-area">
+        <input type="text" id="userInput" placeholder="Type your query or click Start Speech..." />
+        <button id="sendBtn">Send</button>
+        <button id="micBtn" class="mic-btn">Start Speech</button>
+    </div>
+</div>
 
-<h3>Transcribed Speech</h3>
-<textarea id="result" rows="4" cols="70" placeholder="Your speech will appear here..."></textarea>
-
-<h3>Generated SQL Query</h3>
-<textarea id="sqlResult" rows="4" cols="70" readonly></textarea>
-
-<h3>Data from Database</h3>
-<textarea id="data" rows="10" cols="70" readonly></textarea>
 <script>
-    let socket;
-    let audioContext;
-    let microphone;
-    let processor;
-    let stream;
+    let socket = null;
+    let audioContext = null;
+    let microphone = null;
+    let processor = null;
+    let stream = null;
+    let isRecording = false;
 
-    // DOM Element References
-    const startBtn = document.getElementById("startBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const resultInput = document.getElementById("result");
-    const sqlResultInput = document.getElementById("sqlResult");
-    const dataInput = document.getElementById("data");
+    const chatBox = document.getElementById("chatBox");
+    const userInput = document.getElementById("userInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const micBtn = document.getElementById("micBtn");
 
-    startBtn.onclick = async function () {
-        resultInput.value = "";
-        sqlResultInput.value = "Listening...";
-        dataInput.value = "";
+    function appendMessage(sender, text, sql, data) {
+        const msgDiv = document.createElement("div");
+        msgDiv.className = `message ${sender}-message`;
 
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        socket = new WebSocket(protocol + "//" + window.location.host + "/Home/Stream");
-        socket.binaryType = "arraybuffer";
+        let content = `<div>${text}</div>`;
+        if (sql) {
+            content += `<div class="sql-block"><strong>SQL Query:</strong><br>${sql}</div>`;
+        }
+        if (data) {
+            const dataStr = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+            content += `<div style="margin-top:5px;"><strong>Results:</strong><pre style="margin:0; max-height: 150px; overflow-y: auto;">${dataStr}</pre></div>`;
+        }
 
-        socket.onopen = async function () {
-            console.log("WebSocket connected");
+        msgDiv.innerHTML = content;
+        chatBox.appendChild(msgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
 
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioContext = new AudioContext();
-            microphone = audioContext.createMediaStreamSource(stream);
-            processor = audioContext.createScriptProcessor(4096, 1, 1);
+    async function sendQuery(queryText) {
+        if (!queryText || queryText.trim() === "") return;
 
-            processor.onaudioprocess = function (event) {
-                if (socket.readyState !== WebSocket.OPEN) return;
-                const input = event.inputBuffer.getChannelData(0);
-                const pcmData = downsampleAndConvert(input, audioContext.sampleRate, 16000);
-                socket.send(pcmData);
+        appendMessage("user", queryText);
+        userInput.value = "";
+
+        // Show temporary thinking placeholder
+        const loadingDiv = document.createElement("div");
+        loadingDiv.className = "message bot-message";
+        loadingDiv.id = "loadingMsg";
+        loadingDiv.innerText = "Processing query...";
+        chatBox.appendChild(loadingDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        try {
+            const response = await fetch('/Home/ProcessQuery', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: queryText })
+            });
+
+            const loadingEl = document.getElementById("loadingMsg");
+            if (loadingEl) loadingEl.remove();
+
+            if (!response.ok) {
+                appendMessage("bot", `Server Error (HTTP ${response.status})`);
+                return;
+            }
+
+            const resData = await response.json();
+
+            if (resData.success) {
+                appendMessage("bot", "Query execution completed:", resData.generatedSql, resData.resultData);
+            } else {
+                appendMessage("bot", "Error executing query: " + (resData.error || "Unknown error"));
+            }
+        } catch (err) {
+            const loadingEl = document.getElementById("loadingMsg");
+            if (loadingEl) loadingEl.remove();
+            appendMessage("bot", "Network Failure: Unable to communicate with server.");
+        }
+    }
+
+    sendBtn.onclick = () => sendQuery(userInput.value);
+    userInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") sendQuery(userInput.value);
+    });
+
+    micBtn.onclick = async function () {
+        if (isRecording) {
+            stopMic();
+            return;
+        }
+
+        try {
+            const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+            socket = new WebSocket(protocol + "//" + window.location.host + "/Home/Stream");
+            socket.binaryType = "arraybuffer";
+
+            socket.onopen = async function () {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                microphone = audioContext.createMediaStreamSource(stream);
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                processor.onaudioprocess = function (event) {
+                    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+                    const input = event.inputBuffer.getChannelData(0);
+                    socket.send(downsampleAndConvert(input, audioContext.sampleRate, 16000));
+                };
+
+                microphone.connect(processor);
+                processor.connect(audioContext.destination);
+
+                isRecording = true;
+                micBtn.innerText = "Stop Speech";
+                micBtn.classList.add("recording");
             };
 
-            microphone.connect(processor);
-            processor.connect(audioContext.destination);
-
-            startBtn.disabled = true;
-            stopBtn.disabled = false;
-        };
-
-        socket.onmessage = async function (event) {
-            console.log("Vosk Raw Message:", event.data);
-            const dataObj = JSON.parse(event.data);
-
-            // Display partial live transcriptions
-            if (dataObj.partial !== undefined) {
-                resultInput.value = dataObj.partial;
-            }
-
-            // Display final transcription frame and call backend API
-            if (dataObj.text !== undefined && dataObj.text.trim() !== "") {
-                resultInput.value = dataObj.text;
-                sqlResultInput.value = "Generating SQL query...";
-
+            socket.onmessage = function (event) {
+                if (!event.data) return;
                 try {
-                    const response = await fetch('/Home/ProcessQuery', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ question: dataObj.text })
-                    });
+                    const dataObj = JSON.parse(event.data);
+                    const text = dataObj.text || dataObj.partial || "";
+                    if (text.trim() !== "") userInput.value = text;
 
-                    const resData = await response.json();
-                    console.log("ProcessQuery Response:", resData);
-
-                    if (resData.success) {
-                        sqlResultInput.value = resData.generatedSql || "No SQL generated.";
-                        dataInput.value = resData.resultData || "No records returned.";
-                    } else {
-                        sqlResultInput.value = "Error generating SQL.";
-                        dataInput.value = "Database Error: " + resData.error;
+                    if (dataObj.text && dataObj.text.trim() !== "") {
+                        stopMic();
+                        sendQuery(dataObj.text);
                     }
-                } catch (err) {
-                    console.error("Error calling /Home/ProcessQuery:", err);
-                    sqlResultInput.value = "Fetch failed. Check browser console.";
-                }
-            }
-        };
+                } catch (e) {}
+            };
 
-        socket.onerror = function (error) {
-            console.error("WebSocket error:", error);
-        };
-
-        socket.onclose = function () {
-            console.log("WebSocket closed");
-        };
+            socket.onerror = () => stopMic();
+        } catch (e) {
+            stopMic();
+        }
     };
 
-    stopBtn.onclick = function () {
+    function stopMic() {
         if (processor) { processor.disconnect(); processor = null; }
         if (microphone) { microphone.disconnect(); microphone = null; }
         if (stream) { stream.getTracks().forEach(track => track.stop()); stream = null; }
         if (audioContext) { audioContext.close(); audioContext = null; }
         if (socket) { socket.close(); socket = null; }
 
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-    };
+        isRecording = false;
+        micBtn.innerText = "Start Speech";
+        micBtn.classList.remove("recording");
+    }
 
     function downsampleAndConvert(buffer, inputSampleRate, outputSampleRate) {
-        if (outputSampleRate === inputSampleRate) {
-            return convertFloat32ToInt16(buffer);
-        }
+        if (outputSampleRate === inputSampleRate) return convertFloat32ToInt16(buffer);
         const sampleRateRatio = inputSampleRate / outputSampleRate;
         const newLength = Math.round(buffer.length / sampleRateRatio);
         const result = new Int16Array(newLength);
@@ -139,7 +251,7 @@
                 accum += buffer[i];
                 count++;
             }
-            result[offsetResult] = Math.max(-1, Math.min(1, accum / count)) * 32767;
+            result[offsetResult] = Math.max(-1, Math.min(1, count > 0 ? accum / count : 0)) * 32767;
             offsetResult++;
             offsetBuffer = nextOffsetBuffer;
         }
